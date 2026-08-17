@@ -89,26 +89,60 @@ def retrieve_for_case(
     case: dict[str, Any],
     extra_messages: list[dict[str, str]],
 ) -> dict[str, Any]:
-    """BONUS TODO: run student retrieval for the loaded case.
+    """BONUS TODO: run student retrieval for the loaded case."""
+    dataset = load_dataset()
+    query = case.get("query", "")
+    layer = case.get("expected_layer", "")
 
-    Return a dict with keys:
-      - "merged_context": str  (StudentMemory.assemble_context output)
-      - "layers": dict[str, str]  (per-layer evidence: short_term/long_term/
-                                   episodic/semantic)
-      - "budget": dict  (the breakdown from assemble_context)
+    def build_short_term() -> str:
+        stm = ShortTermMemory(strategy="sliding", max_recent_messages=6, pressure_tokens=450)
+        messages = case.get("fixture_messages")
+        if not messages:
+            for user in dataset["users"]:
+                if user["user_id"] == case.get("user_id"):
+                    for session in user.get("sessions", []):
+                        if session["thread_id"] == case.get("thread_id"):
+                            messages = session.get("messages", [])
+                            break
+                    break
+        for msg in messages or []:
+            stm.add(msg["role"], msg["content"])
+        for msg in extra_messages:
+            stm.add(msg["role"], msg["content"])
+        return stm.render()
 
-    Hints:
-      * Build short_term from case["fixture_messages"] if present, else from
-        the matching user/thread messages in data/sessions.json, plus
-        extra_messages. E01 has no fixture — it uses thread minh-s1.
-      * Decide which durable layers to fetch from case["expected_layer"] (or
-        case["retrieve_layers"] for "mixed"), then call
-        memory.retrieve_long_term / retrieve_episodic / retrieve_semantic.
-      * Keep user_id and thread_id from the loaded case.
-      * Finish with memory.assemble_context(layers).
-    """
-    _ = (memory, case, extra_messages, settings, ShortTermMemory)
-    raise NotImplementedError("BONUS TODO: run student retrieval for the loaded case")
+    layers: dict[str, str] = {
+        "short_term": "",
+        "long_term": "",
+        "episodic": "",
+        "semantic": "",
+    }
+
+    if layer == "short_term":
+        layers["short_term"] = build_short_term()
+    elif layer == "long_term":
+        layers["long_term"] = memory.retrieve_long_term(
+            case["user_id"], case["thread_id"], query
+        )
+    elif layer == "episodic":
+        layers["episodic"] = memory.retrieve_episodic(case["user_id"], query)
+    elif layer == "semantic":
+        layers["semantic"] = memory.retrieve_semantic(settings.semantic_graph_id, query)
+    elif layer == "mixed":
+        wanted = case.get("retrieve_layers") or ["long_term", "semantic"]
+        if "short_term" in wanted:
+            layers["short_term"] = build_short_term()
+        if "long_term" in wanted:
+            layers["long_term"] = memory.retrieve_long_term(
+                case["user_id"], case["thread_id"], query
+            )
+        if "episodic" in wanted:
+            layers["episodic"] = memory.retrieve_episodic(case["user_id"], query)
+        if "semantic" in wanted:
+            layers["semantic"] = memory.retrieve_semantic(settings.semantic_graph_id, query)
+
+    merged, budget = memory.assemble_context(layers)
+    return {"merged_context": merged, "layers": layers, "budget": budget}
 
 
 def main() -> None:
